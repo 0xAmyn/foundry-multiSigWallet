@@ -7,7 +7,9 @@
       - sign the message
       - withdraw funds
       - change the required number of signers
-      
+   
+   TODO:
+      remove require in favor of error messages
 */
 
 // SPDX-License-Identifier: MIT
@@ -19,26 +21,28 @@ error MultiSigWallet__SignerAlreadySigned();
 error MultiSigWallet__TransactionAlreadyFinished();
 error MultiSigWallet__TransactionNeedMoreSigns();
 error MultiSigWallet__TransactionTypeNotSupported();
+error MultiSigWallet__TransactionCompletelySigned();
 
 contract MultiSigWallet {
    /**
     * @notice the number of signers required to sign a message to perform a transfer
     * @dev this is the number of signers that must sign the message before it is considered valid
-    * @return uint256
     */
-   uint256 public s_requiredSigners;
+   uint256 private s_requiredSigners;
 
    /**
     * @notice list of signers that may sign a message
     * @dev this is the list of signers that may sign a message
     */
-   mapping(address => bool) public s_signers;
-   address[] s_signersArray;
+   mapping(address => bool) private s_signers;
+   address[] private s_signersArray;
+
+   mapping(address to => uint256 amount) private s_transferHistory;
 
    enum TransactionType {
       AddSigner,
       RemoveSigner,
-      Withdraw,
+      ChangeRequiredSigners,
       Transfer
    }
 
@@ -50,6 +54,7 @@ contract MultiSigWallet {
       bytes data; // To store specific transaction data
    }
 
+
    struct AddSignerData {
       address newSigner;
    }
@@ -58,8 +63,8 @@ contract MultiSigWallet {
       address signerToRemove;
    }
 
-   struct WithdrawData {
-      uint256 amount;
+   struct ChangeRequiredSignersData {
+      uint256 count;
    }
 
    struct TransferData {
@@ -91,17 +96,17 @@ contract MultiSigWallet {
       _;
    }
 
-   function initilizeTransaction(bytes memory data) internal returns (Transaction memory) {
-      address[] memory signers = new address[](1);
-      signers[0] = msg.sender;
+   function initilizeTransaction(TransactionType _type, bytes memory _data) internal returns (Transaction memory) {
+      address[] memory signers = new address[](0);
 
       Transaction memory newTransaction = Transaction({
          isFinished: false,
-         transactionType: TransactionType.AddSigner,
-         signersCount: 1,
+         transactionType: _type,
+         signersCount: 0,
          signers: signers,
-         data: data
+         data: _data
       });
+
       s_transactions.push(newTransaction);
       return newTransaction;
    }
@@ -109,20 +114,37 @@ contract MultiSigWallet {
    // ---------------------------- REQUESTS -----------------------------
 
    function addSignerRequest(address _signer) public onlySigner {
+      require(_signer != address(0), "MultiSigWallet__SignerCannotBeZeroAddress()");
+      require(_signer != msg.sender, "MultiSigWallet__SignerCannotAddSelf()");
+      require(!s_signers[_signer], "MultiSigWallet__SignerAlreadyAdded()");
+      
       AddSignerData memory addSignerData = AddSignerData(_signer);
-      initilizeTransaction(abi.encode(addSignerData));
-      signTransaction(s_transactions.length - 1);
+      initilizeTransaction(TransactionType.AddSigner, abi.encode(addSignerData));
    }
 
-   // function removeSignerRequest(address signer) public onlySigner {}
+   function removeSignerRequest(address _signer) public onlySigner {
+      require(_signer != address(0), "MultiSigWallet__SignerCannotBeZeroAddress()");
+      require(_signer != msg.sender, "MultiSigWallet__SignerCannotRemoveSelf()");
+      require(s_signers[_signer], "MultiSigWallet__SignerDoesNotExist()");
+      require(s_signersArray.length > s_requiredSigners, "MultiSigWallet__CannotRemoveLastSigner()");
 
-   // function changeRequiredSignersRequest(uint256 requiredSigners) public {}
+      RemoveSignerData memory data = RemoveSignerData(_signer);
+      initilizeTransaction(TransactionType.RemoveSigner, abi.encode(data));
+   }
 
-   // function getRequiredSigners() public view returns (uint256) {}
+   function changeRequiredSignersRequest(uint256 _requiredSigners) public onlySigner {
+      require(_requiredSigners > 0, "MultiSigWallet__RequiredSignersMustBeGreaterThanZero()");
+      require(_requiredSigners <= s_signersArray.length, "MultiSigWallet__RequiredSignersExceedSignerCount()");
+      require(_requiredSigners!= s_requiredSigners, "MultiSigWallet__RequiredSignersMustChange()");
 
-   // function withdrawalRequest(uint256 amount) public {}
+      ChangeRequiredSignersData memory data = ChangeRequiredSignersData(_requiredSigners);
+      initilizeTransaction(TransactionType.ChangeRequiredSigners, abi.encode(data));
+   }
 
-   // function transferFundsRequest(address to, uint256 amount) public {}
+   // function transferFundsRequest(address _to, uint256 _amount) public onlySigner{
+   //    TransferData memory data = TransferData(_to, _amount);
+   //    initilizeTransaction(TransactionType.Transfer, abi.encode(data));
+   // }
 
    // ----------------------------- VERIFY ------------------------------
 
@@ -137,14 +159,14 @@ contract MultiSigWallet {
 
       // make sure transaction is not already signed by msg.sender
       // start from 1 since 0 is the original transaction issuer
-      for (uint i = 1; i < transaction.signers.length; i++) {
+      for (uint i = 0; i < transaction.signers.length; i++) {
          if (transaction.signers[i] == msg.sender) {
             revert MultiSigWallet__SignerAlreadySigned();
          }
       }
       // make sure transaction is not fully signed
       if (transaction.signersCount >= s_requiredSigners) {
-         executeTransaction(_transactionIndex);
+         revert MultiSigWallet__TransactionCompletelySigned();
       }
       else {
          transaction.signersCount++;
@@ -165,6 +187,24 @@ contract MultiSigWallet {
          s_requiredSigners++;
          s_signers[data.newSigner] = true;
          s_signersArray.push(data.newSigner);
+      } 
+      else if (transaction.transactionType == TransactionType.RemoveSigner) {
+         RemoveSignerData memory data = abi.decode(transaction.data, (RemoveSignerData));
+         s_requiredSigners--;
+         s_signers[data.signerToRemove] = false;
+
+         // remove signer from the array
+         uint256 deleteIndex;
+         for (uint256 i = 0; i < s_signersArray.length; i++) {
+            if (s_signersArray[i] == data.signerToRemove) {
+               deleteIndex = i;  
+            }
+         }
+         delete s_signersArray[deleteIndex];
+      }
+      else if (transaction.transactionType == TransactionType.ChangeRequiredSigners) {
+         ChangeRequiredSignersData memory data = abi.decode(transaction.data, (ChangeRequiredSignersData));
+         s_requiredSigners = data.count;
       }
       else {
          revert MultiSigWallet__TransactionTypeNotSupported();
@@ -176,13 +216,17 @@ contract MultiSigWallet {
 
    // ------------------------------ VIEWs ------------------------------
 
-   // function getBalance() public view returns (uint256) {}
+   function getBalance() public view returns (uint256) {
+      return address(this).balance;
+   }
 
    function getSigners() public view returns (address[] memory) {
       return s_signersArray;
    }
 
-   // function getSigner(uint256 index) public view returns (address) {}
+   function getSigner(uint256 index) public view returns (address) {
+      return s_signersArray[index];
+   }
 
    function getSignerCount() public view returns (uint256) {
       return s_signersArray.length;
@@ -192,23 +236,12 @@ contract MultiSigWallet {
       return s_transactions[_transactionIndex];
    }
 
-   // function getWithdrawalCount() public view returns (uint256) {}
+   function getRequiredSigners() public view returns (uint256) {
+      return s_requiredSigners;
+   }
 
-   // function getWithdrawal(
-   //     uint256 index
-   // ) public view returns (uint256, address) {}
+   // function getTransfer(address _to) public view returns (uint256 amount) {
+   //    return s_transferHistory[_to];
+   // }
 
-   // function getTransferCount() public view returns (uint256) {}
-
-   // function getTransfer(
-   //     uint256 index
-   // ) public view returns (uint256, address, address) {}
-
-   // function getMessageCount() public view returns (uint256) {}
-
-   // function getMessage(
-   //     uint256 index
-   // ) public view returns (string memory, uint256, address) {}
-
-   // function getSignerIndex(address signer) public view returns (uint256) {}
 }
