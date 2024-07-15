@@ -4,7 +4,7 @@ pragma solidity ^0.8.23;
 import {Script, console} from "forge-std/Script.sol";
 import {MultiSigWallet} from "../src/MultiSigWallet.sol";
 
-contract DeployTestMultiSigWallet is Script {
+contract DeployMultiSigWallet is Script {
     address[] internal initialSigners;
     uint256 internal requiredSigners;
 
