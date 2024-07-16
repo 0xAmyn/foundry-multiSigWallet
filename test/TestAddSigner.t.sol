@@ -6,7 +6,7 @@ import {Test} from "forge-std/Test.sol";
 import {MultiSigWallet} from "../src/MultiSigWallet.sol";
 import {DeployMultiSigWallet} from "../script/DeployMultiSigWallet.s.sol";
 
-contract TestMultiSigWallet is Test {
+contract TestAddSigner is Test {
     // MultiSigWallet wallet;
     uint256 constant requiredSigners = 2;
 
@@ -118,7 +118,152 @@ contract TestMultiSigWallet is Test {
         assertEq(wallet.getTransaction(0).isFinished, true);
     }
 
-    function testSign__revert_UnauthorizedSigner() public {
+    function testAddSigner__addManySigners() public {
+        MultiSigWallet wallet = deployWallet(1);
+        
+        address signerToBe0 = makeAddr("signerToBe0");
+        address signerToBe1 = makeAddr("signerToBe1");
+        address signerToBe2 = makeAddr("signerToBe2");
+        address signerToBe3 = makeAddr("signerToBe3");
+
+        assertEq(wallet.getSignerCount(), 3); // inital number is 3
+
+        vm.startPrank(signer0);
+        wallet.addSignerRequest(signerToBe0);
+        wallet.addSignerRequest(signerToBe1);
+        wallet.addSignerRequest(signerToBe2);
+        wallet.addSignerRequest(signerToBe3);
+
+        assertEq(wallet.getSignerCount(), 3); // should still be 3
+
+        wallet.signTransaction(0);
+        wallet.signTransaction(1);
+        wallet.signTransaction(2);
+        wallet.signTransaction(3);
+
+        assertEq(wallet.getSignerCount(), 3); // should still be 3
+
+        wallet.executeTransaction(0);
+        wallet.executeTransaction(1);
+        wallet.executeTransaction(2);
+        wallet.executeTransaction(3);
+
+        assertEq(wallet.getSignerCount(), 7); // should still be 3 + 4
+
+        vm.stopPrank();
+    }
+
+    function testAddSigner__addManySigners_WithTwoSigners() public {
+        MultiSigWallet wallet = deployWallet(2);
+        
+        address signerToBe0 = makeAddr("signerToBe0");
+        address signerToBe1 = makeAddr("signerToBe1");
+        address signerToBe2 = makeAddr("signerToBe2");
+        address signerToBe3 = makeAddr("signerToBe3");
+
+        assertEq(wallet.getSignerCount(), 3); // inital number is 3
+
+        // user 1 acts
+        vm.startPrank(signer0);
+        wallet.addSignerRequest(signerToBe0);
+        wallet.addSignerRequest(signerToBe1);
+
+        wallet.signTransaction(0);
+        wallet.signTransaction(1);
+
+        vm.stopPrank();
+        
+        // user 2 acts
+        vm.startPrank(signer1);
+        wallet.addSignerRequest(signerToBe2);
+        wallet.addSignerRequest(signerToBe3);
+
+        wallet.signTransaction(0);
+        wallet.signTransaction(1);
+        wallet.signTransaction(2);
+        wallet.signTransaction(3);
+
+        vm.stopPrank();
+
+        // user 1 acts
+        vm.startPrank(signer0);
+        wallet.signTransaction(2);
+        wallet.signTransaction(3);
+        vm.stopPrank();
+
+        // user 2 acts
+        vm.startPrank(signer1);
+        wallet.executeTransaction(3);
+        wallet.executeTransaction(2);
+        vm.stopPrank();
+
+        // one of the new users act
+        vm.startPrank(signerToBe3);
+        wallet.executeTransaction(1);
+        wallet.executeTransaction(0);
+        vm.stopPrank();
+
+        assertEq(wallet.getSignerCount(), 7); // should still be 3 + 4
+
+    }
+
+    function testAddSigner__addManySigners_WithTwoSigners_SignerBeforeConfirmTryExecute() public {
+        MultiSigWallet wallet = deployWallet(2);
+        
+        address signerToBe0 = makeAddr("signerToBe0");
+        address signerToBe1 = makeAddr("signerToBe1");
+        address signerToBe2 = makeAddr("signerToBe2");
+        address signerToBe3 = makeAddr("signerToBe3");
+
+        assertEq(wallet.getSignerCount(), 3); // inital number is 3
+
+        // user 1 acts
+        vm.startPrank(signer0);
+        wallet.addSignerRequest(signerToBe0);
+        wallet.addSignerRequest(signerToBe1);
+
+        wallet.signTransaction(0);
+        wallet.signTransaction(1);
+
+        vm.stopPrank();
+        
+        // user 2 acts
+        vm.startPrank(signer1);
+        wallet.addSignerRequest(signerToBe2);
+        wallet.addSignerRequest(signerToBe3);
+
+        wallet.signTransaction(0);
+        wallet.signTransaction(1);
+        wallet.signTransaction(2);
+        wallet.signTransaction(3);
+
+        vm.stopPrank();
+
+        // user 1 acts
+        vm.startPrank(signer0);
+        wallet.signTransaction(2);
+        wallet.signTransaction(3);
+        vm.stopPrank();
+
+        // user 2 acts
+        vm.startPrank(signer1);
+        wallet.executeTransaction(3);
+        wallet.executeTransaction(2);
+        vm.stopPrank();
+
+        // one of the new users act
+        // this user is not yet a signer
+        // tries to sign his own addSigner Tx
+        vm.startPrank(signerToBe0);
+        vm.expectRevert();
+        wallet.executeTransaction(1);
+        vm.expectRevert();
+        wallet.executeTransaction(0); // <---- this is the place when the user becomes a signer - should fail
+        vm.stopPrank();
+
+    }
+
+        function testSign__revert_UnauthorizedSigner() public {
         MultiSigWallet wallet = deployWallet(2);
 
         vm.prank(signer0);
@@ -131,6 +276,42 @@ contract TestMultiSigWallet is Test {
         wallet.signTransaction(0);
     }
 
+    function testSign__SignFinishedTransaction() public {
+        // Arrange
+        MultiSigWallet wallet = deployWallet(1);
+
+        // Act
+        vm.prank(signer0);
+        wallet.addSignerRequest(signerToBe);
+        vm.prank(signer0);
+        wallet.signTransaction(0);
+        vm.prank(signer0);
+        wallet.executeTransaction(0);
+
+        // Assert
+        assertEq(wallet.getTransaction(0).isFinished, true);
+        vm.expectRevert();
+        wallet.signTransaction(0);
+    }
+
+    function testSign__SignerAlreadySigned() public {
+        MultiSigWallet wallet = deployWallet(1);
+
+        vm.prank(signer0);
+        wallet.addSignerRequest(signerToBe);
+        vm.prank(signer0);
+        wallet.signTransaction(0);
+
+        // s0 sign again.
+        vm.expectRevert();
+        vm.prank(signer0);
+        wallet.signTransaction(0);
+
+        // make sure tx is not finished.
+        assertEq(wallet.getTransaction(0).isFinished, false);
+    }
+
+
 
     function testExecute__revert_NotEnoughSignBeforeExecuteBySameSigner() public {
         MultiSigWallet wallet = deployWallet(2);
@@ -139,7 +320,7 @@ contract TestMultiSigWallet is Test {
         wallet.addSignerRequest(signerToBe);
         vm.prank(signer0);
         wallet.signTransaction(0);
-        // only 1 sign by signer0
+        // only 1 sign by signer0 when 2 reqired
         // signer0 try to execute
 
         vm.expectRevert();
@@ -154,7 +335,7 @@ contract TestMultiSigWallet is Test {
         wallet.addSignerRequest(signerToBe);
         vm.prank(signer0);
         wallet.signTransaction(0);
-        // only 1 sign by signer0
+        // only 1 sign by signer0 when 2 reqired
         // signer1 try to execute
         
         vm.expectRevert();
@@ -162,16 +343,55 @@ contract TestMultiSigWallet is Test {
         wallet.executeTransaction(0);
     }
 
-    // function test__revert_TransactionDoesNotExist() public {
-    //     MultiSigWallet wallet = deployWallet(2);
+    function testExecute__revert_TransactionDoesNotExist() public {
+        MultiSigWallet wallet = deployWallet(1);
 
-    //     vm.prank(signer0);
-    //     wallet.addSignerRequest(signerToBe);
-    //     vm.prank(signer0);
-    //     wallet.signTransaction(0);
-        
-    //     vm.expectRevert();
-    //     vm.prank(unknown);
-    //     wallet.signTransaction(0);
-    // }
+        vm.prank(signer0);
+        wallet.addSignerRequest(signerToBe);
+        vm.prank(signer0);
+        wallet.signTransaction(0);
+  
+        vm.expectRevert();
+        vm.prank(signer0);
+        wallet.executeTransaction(10000);
+    }
+
+    
+    function testExecute__revert_TransactionNeedMoreSigns() public {
+        MultiSigWallet wallet = deployWallet(3);
+
+        vm.prank(signer1);
+        wallet.addSignerRequest(signerToBe);
+
+        vm.prank(signer2);
+        wallet.signTransaction(0);
+        vm.prank(signer0);
+        wallet.signTransaction(0);
+        // vm.prank(signer1);
+        // wallet.signTransaction(0);
+
+        vm.expectRevert();
+        vm.prank(signer2);
+        wallet.executeTransaction(0);
+    }
+
+    function testSign__revert_MoreSignsThanRequired() public {
+        MultiSigWallet wallet = deployWallet(2);
+
+        vm.prank(signer1);
+        wallet.addSignerRequest(signerToBe);
+
+        vm.prank(signer2);
+        wallet.signTransaction(0);
+        vm.prank(signer0);
+        wallet.signTransaction(0);
+
+        vm.expectRevert(); 
+        vm.prank(signer1);
+        wallet.signTransaction(0); // <-- Two Signs required but three was given
+
+    }
+
+
+
 }

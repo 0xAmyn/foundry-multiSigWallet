@@ -79,6 +79,8 @@ contract MultiSigWallet {
     */
    constructor(address[] memory _signers, uint256 _requiredSigners) {
       require(_signers.length >= _requiredSigners, "MultiSigWallet__InitialSignersExceedRequiredSigners()");
+      require(_requiredSigners > 0, "MultiSigWallet__RequiredSignersZero()");
+      
       // add all initial signers
       for (uint256 i = 0; i < _signers.length; i++) {
          s_signers[_signers[i]] = true;
@@ -184,7 +186,6 @@ contract MultiSigWallet {
 
       if (transaction.transactionType == TransactionType.AddSigner) {
          AddSignerData memory data = abi.decode(transaction.data, (AddSignerData));
-         s_requiredSigners++;
          s_signers[data.newSigner] = true;
          s_signersArray.push(data.newSigner);
       } 
